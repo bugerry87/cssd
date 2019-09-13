@@ -41,12 +41,29 @@ def init_arg_parser(parents=[]):
 		help='A folder of class wise separated images',
 		default='data'
 		)
+    
+    parser.add_argument(
+		'--device', '-D',
+		help='Force device selection',
+		default=None
+		)
+    
+    parser.add_argument(
+		'--save_dir', '-S',
+		help='A folder of class wise separated images',
+		default=None
+		)
+    
+    parser.add_argument(
+		'--load', '-L',
+		help='A folder of class wise separated images',
+		default=None
+		)
 
 	return parser
 
 
 def val_known_args(args):
-
     if not args.device:
         args.device = "cuda:0" if torch.cuda.is_available() else "cpu"
     
@@ -76,21 +93,6 @@ def create_dataloaders(args):
     return dataloaders
 
 
-def create_classifier(args):
-    
-
-    device = torch.device(args.device)
-    
-    model = models.resnet18(pretrained=True)
-    num_ftrs = model.fc.in_features
-    model.fc = nn.Linear(num_ftrs, 2)
-    model = model.to(device)
-
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-    return Classifier(model, optimizer, criterion, device)
-
-
 def run_epoch(classifier, dataloaders, scheduler, phases):
     for phase in phases:
         if phase == 'train':
@@ -116,8 +118,23 @@ def run_epoch(classifier, dataloaders, scheduler, phases):
 
 
 def main(args):
+    device = torch.device(args.device)
+    
+    if not args.load:
+        model = models.resnet18(pretrained=True)
+        num_ftrs = model.fc.in_features
+        model.fc = nn.Linear(num_ftrs, 2)
+        model = model.to(device)
+    elif os.path.isfile(args.load):
+        checkpoint = torch.load(args.load)
+        
+    else:
+        raise ValueError("{} is not a file!".format(args.load))
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    classifier = Classifier(model, optimizer, criterion, device)
     dataloaders = create_dataloaders(args)
-    classifier = create_classifier(args)
     scheduler = lr_scheduler.StepLR(classifier.optimizer, step_size=args.decay, gamma=args.gamma) 
     
     watch = Stopwatch()
@@ -138,10 +155,8 @@ def main(args):
                     torch.save(best_model, os.path.join(args.save_dir, args.name + '_best.model'))
         
     elapsed = watch.elapsed()
-    print('Complete in {:.0f}m {:.0f}s'.format(elapsed // 60, elapsed % 60))
+    print('Complete in {:.0f}h {:.0f}m {:.0f}s'.format(elapsed // 360,elapsed // 60, elapsed % 60))
     print('Best val Acc: {:4f}'.format(best_acc))
-    
-    
     return 0
 
 
