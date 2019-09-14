@@ -37,7 +37,7 @@ def init_arg_parser(parents=[]):
 		)
 	
 	parser.add_argument(
-		'--data_dir', '-X',
+		'--data', '-X',
 		help='A folder of class wise separated images',
 		default='data'
 		)
@@ -49,15 +49,47 @@ def init_arg_parser(parents=[]):
 		)
     
     parser.add_argument(
-		'--save_dir', '-S',
-		help='A folder of class wise separated images',
+		'--save', '-S',
+		help='A folder for the checkpoints',
 		default=None
 		)
     
     parser.add_argument(
-		'--load', '-L',
-		help='A folder of class wise separated images',
+		'--export', '-E',
+		help='A folder for the fix model export',
 		default=None
+		)
+    
+    parser.add_argument(
+		'--name', '-N',
+		help='A name for the model',
+		default='cssd'
+		)
+    
+    parser.add_argument(
+		'--load', '-L',
+		help='A certain checkpoint to proceed at',
+		default=None
+		)
+    
+    parser.add_argument(
+		'--lr', '-l',
+		help='The learning rate',
+        type=double,
+		default=0.001
+		)
+    
+    parser.add_argument(
+		'--mom', '-m',
+		help='Momentum',
+        type=double
+		default=0.9
+		)
+    
+    parser.add_argument(
+		'--phases', '-p',
+		help='Phases per epoch',
+		default=('train', 'val')
 		)
 
 	return parser
@@ -88,7 +120,7 @@ def create_dataloaders(args):
         ]),
     }
 
-    image_datasets = {x: datasets.ImageFolder(os.path.join(args.data_dir, x), data_transforms[x]) for x in args.phases}
+    image_datasets = {x: datasets.ImageFolder(os.path.join(args.data, x), data_transforms[x]) for x in args.phases}
     dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=4, shuffle=True, num_workers=4) for x in args.phases}
     return dataloaders
 
@@ -115,9 +147,9 @@ def run_epoch(classifier, dataloaders, scheduler, phases):
         print('Phase: {} Loss: {:.4f} Acc: {:.4f}'.format(phase, phase_loss, phase_acc))
         print()
         yield phase_acc, phase_loss, phase
-
-
-def main(args):
+        
+        
+def load_checkpoint(args):
     device = torch.device(args.device)
     
     if not args.load:
@@ -125,34 +157,50 @@ def main(args):
         num_ftrs = model.fc.in_features
         model.fc = nn.Linear(num_ftrs, 2)
         model = model.to(device)
+        optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.mom)
+        scheduler = lr_scheduler.StepLR(optimizer, step_size=args.decay, gamma=args.gamma)
+        epoch = 0
     elif os.path.isfile(args.load):
         checkpoint = torch.load(args.load)
-        
+        model = models.resnet18(pretrained=False)
+        model.load_state_dict(checkpoint['model'])
+        model = model.to(device)
+        optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.mom)
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        scheduler = lr_scheduler.StepLR(optimizer, step_size=args.decay, gamma=args.gamma)
+        scheduler.load_state_dict(checkpoint['scheduler'])
+        epoch = checkpoint['epoch']
     else:
         raise ValueError("{} is not a file!".format(args.load))
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-    classifier = Classifier(model, optimizer, criterion, device)
+    return Classifier(model, optimizer, criterion, device), scheduler, epoch
+
+
+def main(args):
+    classifier, scheduler, epoch = load_checkpoint(args)
     dataloaders = create_dataloaders(args)
-    scheduler = lr_scheduler.StepLR(classifier.optimizer, step_size=args.decay, gamma=args.gamma) 
-    
+      
     watch = Stopwatch()
-    best_model = copy.deepcopy(model.state_dict())
     best_acc = 0.0
     
-    for epoch in range(args.epochs):
+    for epoch in range(epoch, args.epochs):
         print()
         print('Epoch {}/{}'.format(epoch+1, args.epochs))
         print('-' * 10)
  
         for phase_acc, phase_loss, phase in run_epoch(classifier, dataloaders, scheduler, args.phases):
-            if phase == 'val' and phase_acc > best_acc:
+            if phase == 'val' and phase_acc > best_acc and os.path.isdir(args.export):
                 best_acc = phase_acc
-                best_model = copy.deepcopy(classifier.model.state_dict())
-                
-                if os.path.isdir(args.save_dir):
-                    torch.save(best_model, os.path.join(args.save_dir, args.name + '_best.model'))
+                torch.save(classifier.model.state_dict(), os.path.join(args.export, args.name + '.model'))
+            
+            if phase == 'train' and os.path.isdir(args.save):
+                torch.save({
+                    'model': classifier.model.state_dict(),
+                    'optimizer': classifier.optimizer.state_dict(),
+                    'scheduler': scheduler.state_dict(),
+                    'epoch': epoch
+                })
         
     elapsed = watch.elapsed()
     print('Complete in {:.0f}h {:.0f}m {:.0f}s'.format(elapsed // 360,elapsed // 60, elapsed % 60))
