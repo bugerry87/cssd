@@ -1,4 +1,6 @@
 
+import torch
+
 
 class Classifier():
 
@@ -35,7 +37,7 @@ class Classifier():
             labels = labels.to(self.device)
 
             # zero the parameter gradients
-            optimizer.zero_grad()
+            self.optimizer.zero_grad()
 
             # forward
             # track history if only in train

@@ -6,14 +6,10 @@ import os
 from argparse import ArgumentParser
 
 #Installed
-import numpy as np
-import matplotlib.pyplot as plt
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim import lr_scheduler
-import torchvision
 from torchvision import datasets, models, transforms
 
 #Local
@@ -22,77 +18,98 @@ from utils import *
 
 
 def init_arg_parser(parents=[]):
-	'''
-	Initialize an ArgumentParser for this script.
-	
-	Args:
-		parents: A list of ArgumentParsers of other scripts, if there are any.
-		
-	Returns:
-		parser: The ArgumentParsers.
-	'''
-	parser = ArgumentParser(
-		description='Demo for Classifying Handwritten Digits 0-4 via SVM',
-		parents=parents
-		)
-	
-	parser.add_argument(
-		'--data', '-X',
-		help='A folder of class wise separated images',
-		default='data'
-		)
+    '''
+    Initialize an ArgumentParser for this script.
+    
+    Args:
+        parents: A list of ArgumentParsers of other scripts, if there are any.
+        
+    Returns:
+        parser: The ArgumentParsers.
+    '''
+    parser = ArgumentParser(
+        description='Train a classifier',
+        parents=parents
+        )
     
     parser.add_argument(
-		'--device', '-D',
-		help='Force device selection',
-		default=None
-		)
+        '--data', '-X',
+        help='A folder of class wise separated images',
+        default='data'
+        )
     
     parser.add_argument(
-		'--save', '-S',
-		help='A folder for the checkpoints',
-		default=None
-		)
+        '--device', '-D',
+        help='Force device selection',
+        default=None
+        )
     
     parser.add_argument(
-		'--export', '-E',
-		help='A folder for the fix model export',
-		default=None
-		)
+        '--save', '-S',
+        help='A folder for the checkpoints',
+        default='model'
+        )
     
     parser.add_argument(
-		'--name', '-N',
-		help='A name for the model',
-		default='cssd'
-		)
+        '--export', '-E',
+        help='A folder for the fix model export',
+        default='model'
+        )
     
     parser.add_argument(
-		'--load', '-L',
-		help='A certain checkpoint to proceed at',
-		default=None
-		)
+        '--name', '-N',
+        help='A name for the model',
+        default='cssd'
+        )
     
     parser.add_argument(
-		'--lr', '-l',
-		help='The learning rate',
-        type=double,
-		default=0.001
-		)
+        '--load', '-L',
+        help='A certain checkpoint to proceed at',
+        default=None
+        )
     
     parser.add_argument(
-		'--mom', '-m',
-		help='Momentum',
-        type=double
-		default=0.9
-		)
+        '--epochs', '-e',
+        help='Number of epochs',
+        type=int,
+        default=25
+        )
     
     parser.add_argument(
-		'--phases', '-p',
-		help='Phases per epoch',
-		default=('train', 'val')
-		)
+        '--lr', '-l',
+        help='The learning rate',
+        type=float,
+        default=0.001
+        )
+    
+    parser.add_argument(
+        '--mom', '-m',
+        help='Momentum',
+        type=float,
+        default=0.9
+        )
+    
+    parser.add_argument(
+        '--decay', '-d',
+        help='Epochs before learning rate decays',
+        type=int,
+        default=7
+        )
+    
+    parser.add_argument(
+        '--gamma', '-g',
+        help='The ratio of the learning rate decay',
+        type=float,
+        default=0.1
+        )
+    
+    parser.add_argument(
+        '--phases', '-p',
+        help='Phases per epoch',
+        default=('train', 'val')
+        )
 
-	return parser
+    return parser
 
 
 def val_known_args(args):
@@ -105,7 +122,7 @@ def val_known_args(args):
 def create_dataloaders(args):
     # Data augmentation and normalization for training
     # Just normalization for validation
-    data_transforms = {
+    transformer = {
         'train': transforms.Compose([
             transforms.RandomResizedCrop(224),
             transforms.RandomHorizontalFlip(),
@@ -120,12 +137,15 @@ def create_dataloaders(args):
         ]),
     }
 
-    image_datasets = {x: datasets.ImageFolder(os.path.join(args.data, x), data_transforms[x]) for x in args.phases}
+    image_datasets = {x: datasets.ImageFolder(os.path.join(args.data, x), transformer[x]) for x in args.phases}
     dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=4, shuffle=True, num_workers=4) for x in args.phases}
     return dataloaders
 
 
 def run_epoch(classifier, dataloaders, scheduler, phases):
+    running_loss = 0
+    running_acc = 0
+
     for phase in phases:
         if phase == 'train':
             classifier.model.train()
@@ -135,10 +155,10 @@ def run_epoch(classifier, dataloaders, scheduler, phases):
         for outputs, inputs, labels, step, step_loss, step_acc in classifier.run(dataloaders[phase]):
             running_loss += step_loss
             running_acc += step_acc
-            print('Step: {} Loss: {:.4f} Acc: {:.4f}'.format(step, step_loss, step_acc))
+            print('Step: {} Loss: {:.4f} Acc: {}/{}'.format(step, step_loss, step_acc, len(outputs)))
 
-        phase_loss = running_loss / dataset_sizes[phase]
-        phase_acc = running_acc.double() / dataset_sizes[phase]
+        phase_loss = running_loss / step
+        phase_acc = running_acc.double() / step
         
         if phase == 'train':
             scheduler.step()
@@ -200,7 +220,8 @@ def main(args):
                     'optimizer': classifier.optimizer.state_dict(),
                     'scheduler': scheduler.state_dict(),
                     'epoch': epoch
-                })
+                },
+                os.path.join(args.export, '{}_{:0>4}.chkpnt'.format(args.name, epoch+1)))
         
     elapsed = watch.elapsed()
     print('Complete in {:.0f}h {:.0f}m {:.0f}s'.format(elapsed // 360,elapsed // 60, elapsed % 60))
@@ -209,7 +230,7 @@ def main(args):
 
 
 if __name__ == '__main__':
-    parser = init_argparse()
+    parser = init_arg_parser()
     args, _ = parser.parse_known_args()
     args = val_known_args(args)
     main(args)
