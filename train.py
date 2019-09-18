@@ -51,8 +51,9 @@ def init_arg_parser(parents=[]):
     
     parser.add_argument(
         '--device', '-D',
-        help='Force device selection',
-        default=None
+        help='Force device selection. -1 = cpu',
+        type=int,
+        default=0
         )
     
     parser.add_argument(
@@ -125,9 +126,6 @@ def init_arg_parser(parents=[]):
 
 
 def val_known_args(args):
-    if not args.device:
-        args.device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-    
     return args
 
 
@@ -157,7 +155,7 @@ def create_dataloaders(args):
     else:
         valies = None
     
-    return train, valies
+    return trainies, valies
 
 
 def run_epoch(classifier, dataloader, train=False):
@@ -170,7 +168,7 @@ def run_epoch(classifier, dataloader, train=False):
         print('{}\t Step: {} Loss: {:.4f} Acc: {}/{}'.format(step, classifier.step, step_loss, step_acc, len(outputs)))
 
     epoch_loss = epoch_loss / step
-    epoch_acc = epoch_acc.double() / step
+    epoch_acc = float(epoch_acc) / step
     
     print('-' * 10)
     print('{} Loss: {:.4f} Acc: {:.4f}'.format('Train' if train else 'Val',epoch_loss, epoch_acc))
@@ -180,8 +178,15 @@ def run_epoch(classifier, dataloader, train=False):
     
 
 def load_checkpoint(args):
-    device = torch.device(args.device)
-    print("Switch to device {}".format(device))
+    if args.device is -1:
+        device = torch.device('cpu')
+    elif torch.cuda.is_available():
+        torch.cuda.set_device(args.device)
+        device = torch.cuda.current_device()
+        print("Switch to device {}".format(device))
+    else:
+        device = torch.device('cpu')
+        print("Warning: No CUDA, fallback to cpu")
     
     if not args.load:
         model = models.resnet18(pretrained=True)
@@ -237,13 +242,13 @@ def main(args):
                 os.path.join(args.export, '{}_{:0>4}.chkpnt'.format(args.name, epoch+1)))
             
             if valies:
-                _, epoch_acc, _ = run_epoch(classifier, dataloaders, False)
+                _, epoch_acc, _ = run_epoch(classifier, valies, False)
                 if epoch_acc > best_acc and os.path.isdir(args.export):
-                    best_acc = phase_acc
+                    best_acc = epoch_acc
                     torch.save(classifier.model.state_dict(), os.path.join(args.export, args.name + '.model'))
     
     elif valies:
-        run_epoch(classifier, dataloaders, False)
+        run_epoch(classifier, valies, False)
     else:
         raise ValueError("Neither training nor validation data is given!")
         

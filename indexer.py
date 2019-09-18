@@ -12,12 +12,15 @@ if __name__ == '__main__':
             default= '.')
         os.chdir(root)
     
+        headers = myinput("Define your headers: ")
+        fid.write(headers + '\r\n')
+    
         while True:
             wc = myinput("Wildcard for data collection: ")
             label = myinput("Label name: ")
             
             for f in ifile(wc, recursive=False):
-                fid.write("{} {}\r\n".format(f, label))
+                fid.write("{};{}\r\n".format(f, label))
             
             if myinput("Wanna add more? (y/n): ") is not 'y':
                 break

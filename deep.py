@@ -14,7 +14,7 @@ class Index():
             transformer=None,
             loader=torchvision.datasets.folder.default_loader,
             headers=('img','label'),
-            delimiter=' ',
+            delimiter=';',
             skiprows=0
             ):
         self.root = root
@@ -22,6 +22,7 @@ class Index():
         self.loader = loader
         self.headers = headers
         self._csv = pandas.read_csv(index, delimiter=delimiter, skiprows=skiprows)
+        self.labels = {k:v for v,k in enumerate(self._csv[headers[1]].unique())}
     
     @property
     def csv(self):
@@ -30,17 +31,17 @@ class Index():
     def __getitem__(self, idx):
         row = self.csv.iloc[idx]
     
-        y = row[self.headers(1)]
-        file = row[self.headers(0)]
+        y = row[self.headers[1]]
+        file = path.join(self.root, row[self.headers[0]]) if self.root else row[self.headers[0]]
         
-        x = self.loader(path.join(self.root, file))
+        x = self.loader(file)
         if self.transformer:
             x = self.transformer(x)
 
-        return x, y
+        return x, self.labels[y]
     
     def __len__(self):
-        return self.index.shape[0]
+        return self.csv.shape[0]
 
 
 class Classifier():
@@ -83,9 +84,9 @@ class Classifier():
         running_corrects = 0
         
         if train:
-            classifier.model.train()
+            self.model.train()
         else:
-            classifier.model.eval()
+            self.model.eval()
 
         # Iterate over data.
         for step, (inputs, labels) in enumerate(dataloader):
