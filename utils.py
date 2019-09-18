@@ -4,9 +4,7 @@ Helper functions for this project.
 Author: Gerald Baulig
 '''
 
-#Global libs
-import numpy as np
-import matplotlib.pyplot as plt
+#Build in
 from time import time
 from glob import glob, iglob
 
@@ -27,9 +25,11 @@ def myinput(prompt, default=None, cast=None):
         arg = input(prompt)
         if arg == '':
             return default
-        elif cast != None:
+        elif cast is not None:
             try:
-                return cast(arg)
+                arg = cast(arg)
+                if isinstance(arg, ValueError):
+                    print(arg)
             except:
                 print("Invalid input type. Try again...")
         else:
@@ -57,27 +57,7 @@ def ifile(wildcards, sort=False, recursive=True):
             else:
                 yield wc
     else:
-        raise TypeError("wildecards must be string or list.")  
-
-
-def arrange_subplots(pltc):
-    ''' arrange_subplots(pltc) -> fig, axes
-    Arranges a given number of plots to well formated subplots.
-    
-    Args:
-        pltc: The number of plots.
-    
-    Returns:
-        fig: The figure.
-        axes: A list of axes of each subplot.
-    '''
-    cols = int(np.floor(np.sqrt(pltc)))
-    rows = int(np.ceil(pltc/cols))
-    fig, axes = plt.subplots(cols,rows)
-    if not isinstance(axes, np.ndarray):
-        axes = np.array([axes]) #fix format so it can be used consistently.
-    
-    return fig, axes.flatten()
+        raise TypeError("wildecards must be string or list.")
 
 
 class Stopwatch():
@@ -97,3 +77,4 @@ class Stopwatch():
         
     def elapsed(self):
         return time() - self.start
+    

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-
 #BuildIn
 import os
 from argparse import ArgumentParser
@@ -13,7 +12,7 @@ from torch.optim import lr_scheduler
 from torchvision import datasets, models, transforms
 
 #Local
-from deep import Classifier
+from deep import Classifier, Index
 from utils import *
 
 
@@ -33,9 +32,21 @@ def init_arg_parser(parents=[]):
         )
     
     parser.add_argument(
-        '--data', '-X',
-        help='A folder of class wise separated images',
-        default='data'
+        '--train', '-X',
+        help='An index file of training samples',
+        default=None
+        )
+    
+    parser.add_argument(
+        '--val', '-Y',
+        help='An index file of validation samples',
+        default=None
+        )
+    
+    parser.add_argument(
+        '--root', '-R',
+        help='Root dir',
+        default=None
         )
     
     parser.add_argument(
@@ -104,9 +115,10 @@ def init_arg_parser(parents=[]):
         )
     
     parser.add_argument(
-        '--phases', '-p',
-        help='Phases per epoch',
-        default=('train', 'val')
+        '--batch', '-b',
+        help='The batch size',
+        type=int,
+        default=4
         )
 
     return parser
@@ -114,63 +126,62 @@ def init_arg_parser(parents=[]):
 
 def val_known_args(args):
     if not args.device:
-        args.device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        args.device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     
     return args
 
 
 def create_dataloaders(args):
-    # Data augmentation and normalization for training
-    # Just normalization for validation
-    transformer = {
-        'train': transforms.Compose([
+    if args.train:
+        trainies = transforms.Compose([
             transforms.RandomResizedCrop(224),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-        ]),
-        'val': transforms.Compose([
+        ])
+        trainies = Index(args.train, args.root, trainies)
+        trainies = torch.utils.data.DataLoader(trainies, batch_size=args.batch, shuffle=True, num_workers=args.batch)
+    else:
+        trainies = None
+    
+
+    if args.val:
+        valies = transforms.Compose([
             transforms.Resize(256),
             transforms.CenterCrop(224),
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-        ]),
-    }
-
-    image_datasets = {x: datasets.ImageFolder(os.path.join(args.data, x), transformer[x]) for x in args.phases}
-    dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=4, shuffle=True, num_workers=4) for x in args.phases}
-    return dataloaders
-
-
-def run_epoch(classifier, dataloaders, scheduler, phases):
-    running_loss = 0
-    running_acc = 0
-
-    for phase in phases:
-        if phase == 'train':
-            classifier.model.train()
-        else:
-            classifier.model.eval()
+        ])
+        valies = Index(args.val, args.root, valies)
+        valies = torch.utils.data.DataLoader(valies, batch_size=args.batch, shuffle=True, num_workers=args.batch)
+    else:
+        valies = None
     
-        for outputs, inputs, labels, step, step_loss, step_acc in classifier.run(dataloaders[phase]):
-            running_loss += step_loss
-            running_acc += step_acc
-            print('Step: {} Loss: {:.4f} Acc: {}/{}'.format(step, step_loss, step_acc, len(outputs)))
+    return train, valies
 
-        phase_loss = running_loss / step
-        phase_acc = running_acc.double() / step
-        
-        if phase == 'train':
-            scheduler.step()
 
-        print('-' * 10)
-        print('Phase: {} Loss: {:.4f} Acc: {:.4f}'.format(phase, phase_loss, phase_acc))
-        print()
-        yield phase_acc, phase_loss, phase
-        
-        
+def run_epoch(classifier, dataloader, train=False):
+    epoch_loss = 0
+    epoch_acc = 0
+
+    for outputs, inputs, labels, step, step_loss, step_acc in classifier.run(dataloader, train=train):
+        epoch_loss += step_loss
+        epoch_acc += step_acc
+        print('{}\t Step: {} Loss: {:.4f} Acc: {}/{}'.format(step, classifier.step, step_loss, step_acc, len(outputs)))
+
+    epoch_loss = epoch_loss / step
+    epoch_acc = epoch_acc.double() / step
+    
+    print('-' * 10)
+    print('{} Loss: {:.4f} Acc: {:.4f}'.format('Train' if train else 'Val',epoch_loss, epoch_acc))
+    print()
+    
+    return epoch_loss, epoch_acc, step
+    
+
 def load_checkpoint(args):
     device = torch.device(args.device)
+    print("Switch to device {}".format(device))
     
     if not args.load:
         model = models.resnet18(pretrained=True)
@@ -180,6 +191,7 @@ def load_checkpoint(args):
         optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.mom)
         scheduler = lr_scheduler.StepLR(optimizer, step_size=args.decay, gamma=args.gamma)
         epoch = 0
+        step = 0
     elif os.path.isfile(args.load):
         checkpoint = torch.load(args.load)
         model = models.resnet18(pretrained=False)
@@ -190,38 +202,50 @@ def load_checkpoint(args):
         scheduler = lr_scheduler.StepLR(optimizer, step_size=args.decay, gamma=args.gamma)
         scheduler.load_state_dict(checkpoint['scheduler'])
         epoch = checkpoint['epoch']
+        step = checkpoint['step']
     else:
         raise ValueError("{} is not a file!".format(args.load))
 
     criterion = nn.CrossEntropyLoss()
-    return Classifier(model, optimizer, criterion, device), scheduler, epoch
+    return Classifier(model, optimizer, criterion, device, epoch, step), scheduler
 
 
 def main(args):
-    classifier, scheduler, epoch = load_checkpoint(args)
-    dataloaders = create_dataloaders(args)
+    classifier, scheduler = load_checkpoint(args)
+    trainies, valies = create_dataloaders(args)
       
     watch = Stopwatch()
     best_acc = 0.0
     
-    for epoch in range(epoch, args.epochs):
-        print()
-        print('Epoch {}/{}'.format(epoch+1, args.epochs))
-        print('-' * 10)
- 
-        for phase_acc, phase_loss, phase in run_epoch(classifier, dataloaders, scheduler, args.phases):
-            if phase == 'val' and phase_acc > best_acc and os.path.isdir(args.export):
-                best_acc = phase_acc
-                torch.save(classifier.model.state_dict(), os.path.join(args.export, args.name + '.model'))
+    if trainies:
+        for epoch in range(classifier.epoch, args.epochs):
+            print()
+            print('Epoch {}/{}'.format(epoch+1, args.epochs))
+            print('-' * 10)
+     
+            run_epoch(classifier, trainies, True)
+            scheduler.step()
             
-            if phase == 'train' and os.path.isdir(args.save):
+            if os.path.isdir(args.save):
                 torch.save({
                     'model': classifier.model.state_dict(),
                     'optimizer': classifier.optimizer.state_dict(),
                     'scheduler': scheduler.state_dict(),
-                    'epoch': epoch
+                    'epoch': classifier.epoch,
+                    'step': classifier.step
                 },
                 os.path.join(args.export, '{}_{:0>4}.chkpnt'.format(args.name, epoch+1)))
+            
+            if valies:
+                _, epoch_acc, _ = run_epoch(classifier, dataloaders, False)
+                if epoch_acc > best_acc and os.path.isdir(args.export):
+                    best_acc = phase_acc
+                    torch.save(classifier.model.state_dict(), os.path.join(args.export, args.name + '.model'))
+    
+    elif valies:
+        run_epoch(classifier, dataloaders, False)
+    else:
+        raise ValueError("Neither training nor validation data is given!")
         
     elapsed = watch.elapsed()
     print('Complete in {:.0f}h {:.0f}m {:.0f}s'.format(elapsed // 360,elapsed // 60, elapsed % 60))
